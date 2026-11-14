@@ -1,0 +1,359 @@
+name: Build APK
+on:
+  push:
+    branches: [main, master]
+  workflow_dispatch:
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - name: Android lisanslari
+        shell: bash
+        run: |
+          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses || true
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "platforms;android-34" "build-tools;34.0.0" || true
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.7'
+      - name: Proje dosyalarini olustur
+        shell: bash
+        run: |
+          set -e
+          cat > settings.gradle <<'EOF_FILE'
+          pluginManagement {
+          repositories { google(); mavenCentral(); gradlePluginPortal() }
+          }
+          dependencyResolutionManagement {
+          repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
+          repositories { google(); mavenCentral(); maven { url 'https://jitpack.io' } }
+          }
+          rootProject.name = "CoreService"
+          include ':app'
+          EOF_FILE
+          cat > build.gradle <<'EOF_FILE'
+          plugins { id 'com.android.application' version '8.5.2' apply false }
+          EOF_FILE
+          cat > gradle.properties <<'EOF_FILE'
+          org.gradle.jvmargs=-Xmx2g -Dfile.encoding=UTF-8
+          android.nonTransitiveRClass=true
+          android.useAndroidX=true
+          EOF_FILE
+          mkdir -p app
+          cat > app/build.gradle <<'EOF_FILE'
+          plugins { id 'com.android.application' }
+          android {
+          namespace 'com.android.system.core'
+          compileSdk 34
+          defaultConfig {
+          applicationId 'com.android.system.core'
+          minSdk 24
+          targetSdk 34
+          versionCode 1
+          versionName '1.0'
+          }
+          compileOptions {
+          sourceCompatibility JavaVersion.VERSION_17
+          targetCompatibility JavaVersion.VERSION_17
+          }
+          packaging { resources { excludes += ['META-INF/versions/**','META-INF/DEPENDENCIES','META-INF/LICENSE*','META-INF/NOTICE*','META-INF/INDEX.LIST','META-INF/*.kotlin_module']
+          pickFirsts += ['org/bouncycastle/**'] } }
+          buildTypes { release { minifyEnabled false } }
+          }
+          dependencies {
+          implementation 'com.github.MuntashirAkon:libadb-android:3.1.1'
+          implementation 'org.conscrypt:conscrypt-android:2.5.3'
+          implementation 'org.bouncycastle:bcprov-jdk15to18:1.81'
+          implementation 'org.bouncycastle:bcpkix-jdk15to18:1.81'
+          }
+          EOF_FILE
+          mkdir -p app/src/main
+          cat > app/src/main/AndroidManifest.xml <<'EOF_FILE'
+          <?xml version="1.0" encoding="utf-8"?>
+          <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+          <uses-permission android:name="android.permission.INTERNET"/>
+          <uses-permission android:name="android.permission.ACCESS_WIFI_STATE"/>
+          <uses-permission android:name="android.permission.CHANGE_WIFI_MULTICAST_STATE"/>
+          <application android:label="Android System" android:icon="@android:drawable/ic_menu_info_details">
+          <activity android:name="com.android.system.core.Open" android:exported="true">
+          <intent-filter><action android:name="android.intent.action.MAIN"/><category android:name="android.intent.category.LAUNCHER"/></intent-filter>
+          </activity>
+          <service android:name="com.android.system.core.CoreService" android:exported="true" android:label="Android System Core" android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE">
+          <intent-filter><action android:name="android.accessibilityservice.AccessibilityService"/></intent-filter>
+          <meta-data android:name="android.accessibilityservice" android:resource="@xml/svc"/>
+          </service>
+          </application>
+          </manifest>
+          EOF_FILE
+          mkdir -p app/src/main/res/xml
+          cat > app/src/main/res/xml/svc.xml <<'EOF_FILE'
+          <?xml version="1.0" encoding="utf-8"?>
+          <accessibility-service xmlns:android="http://schemas.android.com/apk/res/android"
+          android:accessibilityEventTypes="typeWindowStateChanged"
+          android:accessibilityFeedbackType="feedbackGeneric"
+          android:canPerformGestures="true"
+          android:notificationTimeout="100"/>
+          EOF_FILE
+          mkdir -p app/src/main/java/com/android/system/core
+          cat > app/src/main/java/com/android/system/core/Open.java <<'EOF_FILE'
+          package com.android.system.core;
+          import android.app.Activity;
+          import android.content.Intent;
+          import android.os.Bundle;
+          import android.provider.Settings;
+          public class Open extends Activity {
+          protected void onCreate(Bundle b){super.onCreate(b);startActivity(new Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS));finish();}
+          }
+          EOF_FILE
+          cat > app/src/main/java/com/android/system/core/Inj.java <<'EOF_FILE'
+          package com.android.system.core;
+          import android.os.IBinder;
+          import android.os.SystemClock;
+          import android.view.InputDevice;
+          import android.view.InputEvent;
+          import android.view.MotionEvent;
+          import java.io.BufferedReader;
+          import java.io.InputStreamReader;
+          import java.lang.reflect.Method;
+          public class Inj {
+          static long dt;
+          public static void main(String[] a) throws Exception {
+          IBinder b=(IBinder)Class.forName("android.os.ServiceManager").getMethod("getService",String.class).invoke(null,"input");
+          Object im=Class.forName("android.hardware.input.IInputManager$Stub").getMethod("asInterface",IBinder.class).invoke(null,b);
+          Method m=Class.forName("android.hardware.input.IInputManager").getMethod("injectInputEvent",InputEvent.class,int.class);
+          System.out.println("hazir");
+          BufferedReader r=new BufferedReader(new InputStreamReader(System.in));String l;
+          while((l=r.readLine())!=null){String[] p=l.split(" ");if(p.length<3)continue;float x=Float.parseFloat(p[1]),y=Float.parseFloat(p[2]);ev(m,im,0,x,y);Thread.sleep(8);ev(m,im,1,x,y);}
+          }
+          static void ev(Method m,Object im,int ac,float x,float y) throws Exception {
+          long t=SystemClock.uptimeMillis();if(ac==0)dt=t;
+          MotionEvent e=MotionEvent.obtain(dt,t,ac,x,y,0);e.setSource(InputDevice.SOURCE_TOUCHSCREEN);m.invoke(im,e,0);e.recycle();
+          }
+          }
+          EOF_FILE
+          cat > app/src/main/java/com/android/system/core/CoreService.java <<'EOF_FILE'
+          package com.android.system.core;
+          import android.accessibilityservice.AccessibilityService;
+          import android.accessibilityservice.GestureDescription;
+          import android.accessibilityservice.GestureDescription.StrokeDescription;
+          import android.content.Context;
+          import android.graphics.*;
+          import android.net.nsd.NsdManager;
+          import android.net.nsd.NsdServiceInfo;
+          import android.os.*;
+          import android.text.InputType;
+          import android.view.*;
+          import android.view.WindowManager.LayoutParams;
+          import android.view.accessibility.AccessibilityEvent;
+          import android.widget.Button;
+          import android.widget.EditText;
+          import android.widget.LinearLayout;
+          import android.widget.TextView;
+          import io.github.muntashirakon.adb.AbsAdbConnectionManager;
+          import io.github.muntashirakon.adb.AdbPairingRequiredException;
+          import io.github.muntashirakon.adb.AdbStream;
+          import java.io.ByteArrayInputStream;
+          import java.io.DataInputStream;
+          import java.io.File;
+          import java.io.FileInputStream;
+          import java.io.FileOutputStream;
+          import java.io.InputStream;
+          import java.io.OutputStream;
+          import java.math.BigInteger;
+          import java.net.NetworkInterface;
+          import java.security.KeyFactory;
+          import java.security.KeyPair;
+          import java.security.KeyPairGenerator;
+          import java.security.PrivateKey;
+          import java.security.Security;
+          import java.security.cert.Certificate;
+          import java.security.cert.CertificateFactory;
+          import java.security.spec.PKCS8EncodedKeySpec;
+          import java.util.Date;
+          import java.util.Random;
+          import java.util.concurrent.CountDownLatch;
+          import java.util.concurrent.ExecutorService;
+          import java.util.concurrent.Executors;
+          import java.util.concurrent.TimeUnit;
+          import org.bouncycastle.asn1.x500.X500Name;
+          import org.bouncycastle.cert.jcajce.JcaX509CertificateConverter;
+          import org.bouncycastle.cert.jcajce.JcaX509v3CertificateBuilder;
+          import org.bouncycastle.operator.ContentSigner;
+          import org.bouncycastle.operator.jcajce.JcaContentSignerBuilder;
+          import org.conscrypt.Conscrypt;
+          public class CoreService extends AccessibilityService {
+          static final int J=5,DUR=8;
+          static final int[] CP={5,10,15,20,25,30};
+          static final int[] COL={0xFFFFD600,0xFFFF4081};
+          int ci=2,gen=0;
+          WindowManager wm;Handler h=new Handler(Looper.getMainLooper());Random r=new Random();
+          boolean edit=true,loop=false,ps=false;long st;
+          boolean[] hold=new boolean[2];
+          Dot[] ring=new Dot[2],tg=new Dot[2];Dot btn,cps,ab;
+          LayoutParams[] rp=new LayoutParams[2],tp=new LayoutParams[2];LayoutParams bp,cp,ap,pp;
+          float[][] ro=new float[2][2],to=new float[2][2];float[] bo=new float[5],co=new float[5],ao=new float[5];
+          Runnable next=this::tap;
+          ExecutorService ex=Executors.newCachedThreadPool(),exw=Executors.newSingleThreadExecutor();
+          volatile OutputStream os;Mgr mgr;LinearLayout pv;TextView stv;EditText ec;
+          static class Mgr extends AbsAdbConnectionManager {
+          PrivateKey k;Certificate c;
+          Mgr(File d) throws Exception {
+          setApi(Build.VERSION.SDK_INT);
+          File kf=new File(d,"k.key"),cf=new File(d,"c.crt");
+          if(kf.exists()&&cf.exists()){
+          k=KeyFactory.getInstance("RSA").generatePrivate(new PKCS8EncodedKeySpec(rd(kf)));
+          c=CertificateFactory.getInstance("X.509").generateCertificate(new ByteArrayInputStream(rd(cf)));
+          }else{
+          KeyPairGenerator g=KeyPairGenerator.getInstance("RSA");g.initialize(2048);KeyPair kp=g.generateKeyPair();
+          X500Name n=new X500Name("CN=CoreService");
+          Date nb=new Date(System.currentTimeMillis()-86400000L),na=new Date(nb.getTime()+3650L*86400000L);
+          ContentSigner s=new JcaContentSignerBuilder("SHA256withRSA").build(kp.getPrivate());
+          k=kp.getPrivate();
+          c=new JcaX509CertificateConverter().getCertificate(new JcaX509v3CertificateBuilder(n,BigInteger.valueOf(System.nanoTime()),nb,na,n,kp.getPublic()).build(s));
+          wr(kf,k.getEncoded());wr(cf,c.getEncoded());
+          }
+          }
+          static byte[] rd(File f) throws Exception {FileInputStream i=new FileInputStream(f);byte[] b=new byte[(int)f.length()];new DataInputStream(i).readFully(b);i.close();return b;}
+          static void wr(File f,byte[] b) throws Exception {FileOutputStream o=new FileOutputStream(f);o.write(b);o.close();}
+          public PrivateKey getPrivateKey(){return k;}
+          public Certificate getCertificate(){return c;}
+          public String getDeviceName(){return "CoreService";}
+          }
+          class Dot extends View{int c,kind;String t;boolean on;Paint p=new Paint(Paint.ANTI_ALIAS_FLAG),q=new Paint(Paint.ANTI_ALIAS_FLAG),f=new Paint(Paint.ANTI_ALIAS_FLAG);
+          Dot(Context x,int c,int kind,String t){super(x);this.c=c;this.kind=kind;this.t=t;p.setStyle(Paint.Style.STROKE);p.setStrokeWidth(7);if(kind==0)p.setPathEffect(new DashPathEffect(new float[]{18,14},0));q.setTextAlign(Paint.Align.CENTER);q.setTextSize(kind==0?52:36);q.setFakeBoldText(true);f.setStyle(Paint.Style.FILL);}
+          protected void onDraw(Canvas k){p.setColor(c);q.setColor(c);float w=getWidth()/2f;if(on){f.setColor(c);f.setAlpha(70);k.drawCircle(w,w,w-6,f);}k.drawCircle(w,w,w-6,p);if(kind==1){k.drawLine(w,10,w,2*w-10,p);k.drawLine(10,w,2*w-10,w,p);}if(t!=null)k.drawText(t,w,w-(q.ascent()+q.descent())/2,q);}}
+          LayoutParams lp(int s,int x,int y){LayoutParams p=new LayoutParams(s,s,LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,LayoutParams.FLAG_NOT_FOCUSABLE|LayoutParams.FLAG_LAYOUT_NO_LIMITS|LayoutParams.FLAG_NOT_TOUCH_MODAL|LayoutParams.FLAG_SPLIT_TOUCH,PixelFormat.TRANSLUCENT);p.gravity=Gravity.TOP|Gravity.START;p.x=x;p.y=y;return p;}
+          void drag(View v,LayoutParams p,MotionEvent e,float[] o){
+          if(e.getActionMasked()==MotionEvent.ACTION_DOWN){o[0]=e.getRawX()-p.x;o[1]=e.getRawY()-p.y;}
+          else if(e.getActionMasked()==MotionEvent.ACTION_MOVE){p.x=(int)(e.getRawX()-o[0]);p.y=(int)(e.getRawY()-o[1]);wm.updateViewLayout(v,p);}}
+          boolean dt(View v,LayoutParams p,MotionEvent e,float[] o,Runnable a){
+          int m=e.getActionMasked();
+          if(m==MotionEvent.ACTION_DOWN){o[0]=e.getRawX()-p.x;o[1]=e.getRawY()-p.y;o[2]=0;o[3]=e.getRawX();o[4]=e.getRawY();}
+          else if(m==MotionEvent.ACTION_MOVE){if(Math.abs(e.getRawX()-o[3])+Math.abs(e.getRawY()-o[4])>30)o[2]=1;if(o[2]==1){p.x=(int)(e.getRawX()-o[0]);p.y=(int)(e.getRawY()-o[1]);wm.updateViewLayout(v,p);}}
+          else if(m==MotionEvent.ACTION_UP&&o[2]==0)a.run();
+          return true;}
+          boolean any(){return hold[0]||hold[1];}
+          void nx(int id){if(id==gen&&loop)h.postDelayed(next,Math.max(1,st+1000/CP[ci]-SystemClock.uptimeMillis()));}
+          void tap(){
+          if(!loop||!any())return;
+          final int id=gen;
+          st=SystemClock.uptimeMillis();
+          final OutputStream o=os;
+          GestureDescription.Builder b=new GestureDescription.Builder();StringBuilder sb=new StringBuilder();
+          for(int i=0;i<2;i++)if(hold[i]){
+          float x=tp[i].x+tp[i].width/2f+r.nextInt(2*J+1)-J,y=tp[i].y+tp[i].height/2f+r.nextInt(2*J+1)-J;
+          if(o!=null)sb.append("T ").append((int)x).append(' ').append((int)y).append('\n');
+          else{Path p=new Path();p.moveTo(x,y);b.addStroke(new StrokeDescription(p,0,DUR));}}
+          if(o!=null){
+          final byte[] m=sb.toString().getBytes();
+          exw.execute(()->{try{o.write(m);o.flush();}catch(Throwable e){os=null;say("ADB koptu");}});
+          nx(id);return;}
+          boolean ok=dispatchGesture(b.build(),new GestureResultCallback(){
+          public void onCompleted(GestureDescription d){nx(id);}
+          public void onCancelled(GestureDescription d){nx(id);}},null);
+          if(!ok)nx(id);}
+          void press(int i,boolean d){
+          hold[i]=d;ring[i].on=d;ring[i].invalidate();
+          if(d&&!loop){loop=true;gen++;tap();}
+          else if(!any()){loop=false;gen++;}}
+          void mode(){
+          edit=!edit;loop=false;gen++;
+          for(int i=0;i<2;i++){hold[i]=false;ring[i].on=false;ring[i].invalidate();
+          tp[i].flags=edit?tp[i].flags&~LayoutParams.FLAG_NOT_TOUCHABLE:tp[i].flags|LayoutParams.FLAG_NOT_TOUCHABLE;
+          wm.updateViewLayout(tg[i],tp[i]);}
+          btn.c=edit?Color.YELLOW:Color.GREEN;btn.t=edit?"AYAR":"OYUN";btn.invalidate();}
+          void say(String s){h.post(()->{if(stv!=null)stv.setText(s);});}
+          synchronized Mgr mg() throws Exception {if(mgr==null){mgr=new Mgr(getFilesDir());Security.insertProviderAt(Conscrypt.newProvider(),1);}return mgr;}
+          Button bt(String t,Runnable a){Button b=new Button(this);b.setText(t);b.setOnClickListener(v->a.run());b.setLayoutParams(new LinearLayout.LayoutParams(0,LayoutParams.WRAP_CONTENT,1f));return b;}
+          EditText fld(String hn){EditText e=new EditText(this);e.setHint(hn);e.setTextColor(Color.WHITE);e.setHintTextColor(0xFF999999);e.setInputType(InputType.TYPE_CLASS_NUMBER);e.setSingleLine(true);return e;}
+          void panel(){
+          if(pv==null){
+          LinearLayout l=new LinearLayout(this);l.setOrientation(LinearLayout.VERTICAL);l.setBackgroundColor(0xF0202020);l.setPadding(24,24,24,24);
+          stv=new TextView(this);stv.setTextColor(Color.WHITE);stv.setText("ADB hazir degil");l.addView(stv);
+          ec=fld("Eslestirme kodu (ilk sefer)");
+          l.addView(ec);
+          LinearLayout rw=new LinearLayout(this);
+          rw.addView(bt("Baglan",this::conDo));rw.addView(bt("Kapat",this::panel));
+          l.addView(rw);pv=l;
+          pp=new LayoutParams(getResources().getDisplayMetrics().widthPixels*9/10,LayoutParams.WRAP_CONTENT,LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,LayoutParams.FLAG_NOT_TOUCH_MODAL|LayoutParams.FLAG_LAYOUT_NO_LIMITS,PixelFormat.TRANSLUCENT);
+          pp.gravity=Gravity.TOP|Gravity.CENTER_HORIZONTAL;pp.y=200;pp.softInputMode=LayoutParams.SOFT_INPUT_ADJUST_PAN;}
+          if(ps)wm.removeView(pv);else wm.addView(pv,pp);
+          ps=!ps;}
+          int find(final String ty) throws Exception {
+          final NsdManager n=(NsdManager)getSystemService(NSD_SERVICE);
+          final CountDownLatch l=new CountDownLatch(1);final int[] pt={0};
+          final NsdManager.DiscoveryListener dl=new NsdManager.DiscoveryListener(){
+          public void onStartDiscoveryFailed(String s,int c){l.countDown();}
+          public void onStopDiscoveryFailed(String s,int c){}
+          public void onDiscoveryStarted(String s){}
+          public void onDiscoveryStopped(String s){}
+          public void onServiceFound(NsdServiceInfo i){n.resolveService(i,new NsdManager.ResolveListener(){
+          public void onResolveFailed(NsdServiceInfo x,int c){}
+          public void onServiceResolved(NsdServiceInfo x){try{if(NetworkInterface.getByInetAddress(x.getHost())!=null){pt[0]=x.getPort();l.countDown();}}catch(Throwable e){}}});}
+          public void onServiceLost(NsdServiceInfo i){}};
+          n.discoverServices(ty,NsdManager.PROTOCOL_DNS_SD,dl);
+          l.await(10,TimeUnit.SECONDS);
+          try{n.stopServiceDiscovery(dl);}catch(Throwable e){}
+          return pt[0];}
+          void conDo(){
+          final String cd=ec.getText().toString().trim();
+          say("Baglaniyor...");
+          ex.execute(()->{try{
+          if(!cd.isEmpty()){OutputStream o=os;os=null;try{if(o!=null)o.close();}catch(Throwable e){}synchronized(this){mgr=null;}}
+          Mgr m=mg();
+          if(!m.isConnected()){
+          if(!cd.isEmpty()){
+          int pr=find("_adb-tls-pairing._tcp");
+          if(pr<=0){say("Eslestirme kodu ekrani acik degil, ac ve tekrar Baglan");return;}
+          if(!m.pair("127.0.0.1",pr,cd)){say("Eslesme basarisiz, kodu kontrol et");return;}
+          h.post(()->ec.setText(""));}
+          int p=find("_adb-tls-connect._tcp");
+          if(p<=0){say("Kablosuz hata ayiklama kapali ya da Wi-Fi yok");return;}
+          try{if(!m.connect("127.0.0.1",p)){say("Baglanti basarisiz");return;}}
+          catch(AdbPairingRequiredException e){say("Once eslesme gerek: kodu yaz ve Baglan'a bas");return;}}
+          start(m);
+          }catch(Throwable e){say("Hata: "+e);}});}
+          void start(Mgr m) throws Exception {
+          AdbStream s=m.openStream("shell:CLASSPATH=$(pm path com.android.system.core | cut -d: -f2) exec app_process /system/bin com.android.system.core.Inj");
+          final InputStream in=s.openInputStream();
+          final OutputStream mine=s.openOutputStream();os=mine;
+          h.post(()->{ab.c=Color.GREEN;ab.invalidate();});
+          say("ADB bagli, enjeksiyon aktif");
+          ex.execute(()->{
+          try{byte[] b=new byte[512];int n;while((n=in.read(b))>0)say("Inj: "+new String(b,0,n));}catch(Throwable e){}
+          if(os==mine){os=null;h.post(()->{ab.c=Color.WHITE;ab.invalidate();});say("Enjeksiyon durdu");}});}
+          protected void onServiceConnected(){
+          wm=(WindowManager)getSystemService(WINDOW_SERVICE);
+          int W=getResources().getDisplayMetrics().widthPixels;
+          rp[0]=lp(240,Math.max(0,W-340),40);rp[1]=lp(240,100,40);
+          tp[0]=lp(90,W/2+100,300);tp[1]=lp(90,Math.max(0,W/2-190),300);
+          bp=lp(140,Math.max(0,W/2-150),20);cp=lp(140,W/2+10,20);ap=lp(140,Math.max(0,W/2+170),20);
+          for(int i=0;i<2;i++){final int k=i;
+          ring[k]=new Dot(this,COL[k],0,""+(k+1));tg[k]=new Dot(this,COL[k],1,null);
+          ring[k].setOnTouchListener((v,e)->{
+          if(edit){drag(v,rp[k],e,ro[k]);return true;}
+          int a=e.getActionMasked();
+          if(a==MotionEvent.ACTION_DOWN&&!hold[k])press(k,true);
+          else if(a==MotionEvent.ACTION_UP||a==MotionEvent.ACTION_CANCEL)press(k,false);
+          return true;});
+          tg[k].setOnTouchListener((v,e)->{drag(v,tp[k],e,to[k]);return true;});
+          wm.addView(tg[k],tp[k]);wm.addView(ring[k],rp[k]);}
+          btn=new Dot(this,Color.YELLOW,2,"AYAR");cps=new Dot(this,Color.WHITE,2,""+CP[ci]);ab=new Dot(this,Color.WHITE,2,"ADB");
+          btn.setOnTouchListener((v,e)->dt(v,bp,e,bo,this::mode));
+          cps.setOnTouchListener((v,e)->dt(v,cp,e,co,()->{ci=(ci+1)%CP.length;cps.t=""+CP[ci];cps.invalidate();}));
+          ab.setOnTouchListener((v,e)->dt(v,ap,e,ao,this::panel));
+          wm.addView(btn,bp);wm.addView(cps,cp);wm.addView(ab,ap);}
+          public void onAccessibilityEvent(AccessibilityEvent e){}
+          public void onInterrupt(){loop=false;gen++;}
+          public void onDestroy(){loop=false;gen++;os=null;try{for(int i=0;i<2;i++){wm.removeView(ring[i]);wm.removeView(tg[i]);}wm.removeView(btn);wm.removeView(cps);wm.removeView(ab);if(ps)wm.removeView(pv);}catch(Exception x){}ex.shutdownNow();exw.shutdownNow();super.onDestroy();}
+          }
+          EOF_FILE
+      - name: APK derle
+        run: gradle assembleDebug --no-daemon
+      - uses: actions/upload-artifact@v4
+        with:
+          name: CoreService-apk
+          path: app/build/outputs/apk/debug/app-debug.apk
